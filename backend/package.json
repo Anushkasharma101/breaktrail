@@ -1,0 +1,25 @@
+{
+    "name": "breaktrail-backend",
+    "version": "1.0.0",
+    "private": true,
+    "type": "module",
+    "engines": {
+        "node": ">=22.13.0"
+    },
+    "scripts": {
+        "dev": "node --watch src/server.js",
+        "start": "node src/server.js",
+        "seed": "node scripts/seed.js",
+        "test": "node --test --test-concurrency=1 tests/*.test.js",
+        "check:ollama": "node scripts/check-ollama.js"
+    },
+    "dependencies": {
+        "express": "^5.1.0",
+        "cors": "^2.8.5",
+        "dotenv": "^16.4.7",
+        "zod": "^3.24.0"
+    },
+    "devDependencies": {
+        "supertest": "^7.1.0"
+    }
+}

@@ -1,0 +1,53 @@
+import { createHash } from 'node:crypto';
+import express from 'express';
+import cors from 'cors';
+import path from 'node:path';
+import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { z, ZodError } from 'zod';
+import { requestSchema, prefsSchema, planSchema, historySchema, stateSchema, querySchema } from './schemas.js';
+import { eligiblePlaces, buildPlan, fallbackSelection } from './planner.js';
+import { ServiceError } from './ollama.js';
+const idSchema = z.string().min(1).max(200);
+export function createApp({ store, storeForOwner, ollama, config }) {
+    const app = express(); app.disable('x-powered-by');
+    app.use((req, res, next) => { const host = req.hostname.replace(/^\[|\]$/g, ''); if (!config.publicMode && !['localhost', '127.0.0.1', '::1'].includes(host)) return res.status(403).json({ error: { code: 'LOCAL_ONLY', message: 'This backend is intended for localhost.' } }); const origin = req.headers.origin; if (origin && !config.origins.includes(origin)) return res.status(403).json({ error: { code: 'ORIGIN_DENIED', message: 'Frontend origin is not allowed. Set CLIENT_ORIGINS in backend/.env.' } }); next() });
+    app.use(cors({ origin: config.origins, methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization'] })); app.use(express.json({ limit: '5mb' }));
+    // Bearer token is a private device credential, never a public user ID.
+    let windowStart = Date.now(), requests = 0, generations = 0;
+    app.use('/api', (req, res, next) => {
+        if (config.publicMode) {
+            if (Date.now() - windowStart >= 60000) { windowStart = Date.now(); requests = 0; generations = 0; }
+            if (++requests > 600 || (req.method === 'POST' && req.path === '/plans' && ++generations > 10)) {
+                res.set('Retry-After', '60'); return res.status(429).json({ error: { code: 'RATE_LIMIT', message: 'The service is busy. Try again in a minute.' } });
+            }
+        }
+        if (!config.publicMode) return next();
+        if (req.method === 'GET' && (req.path === '/health' || req.path === '/ollama/status' || req.path === '/places' || req.path.startsWith('/places/'))) return next();
+        const match = /^Bearer ([a-f0-9]{64})$/.exec(req.headers.authorization || '');
+        if (!match) return res.status(401).json({ error: { code: 'DEVICE_TOKEN_REQUIRED', message: 'A private device token is required.' } });
+        res.locals.store = storeForOwner(createHash('sha256').update(match[1]).digest('hex')); next();
+    });
+    const userStore = res => res.locals.store || store;
+    app.get('/api/health', (_req, res) => res.json({ status: 'ok', database: 'sqlite', model: config.model, aiMode: (config.provider || 'ollama') + (config.allowFallback ? '-with-explicit-fallback' : '-strict'), localOnly: !config.publicMode }));
+    app.get('/api/ollama/status', async (_req, res) => res.json(await ollama.status()));
+    app.get('/api/places', (req, res) => { const query = querySchema.parse(req.query); let places = userStore(res).places(); if (query.mood || query.minutes || query.area || query.budget) places = eligiblePlaces(places, { area: query.area || 'Central Jaipur', mood: query.mood || 'Quiet', minutes: query.minutes || 45, budget: query.budget || 'Any' }); res.json({ places, catalogue: 'sample', warning: 'Seeded entries are examples; verify travel times, access, and opening hours.' }) });
+    app.get('/api/places/:id', (req, res) => { const place = userStore(res).place(idSchema.parse(req.params.id)); if (!place) throw new ServiceError(404, 'NOT_FOUND', 'Place not found.'); res.json({ place }) });
+    app.get('/api/preferences', (_req, res) => res.json({ preferences: userStore(res).preferences() }));
+    app.put('/api/preferences', (req, res) => res.json({ preferences: userStore(res).setPreferences(prefsSchema.parse(req.body)) }));
+    app.post('/api/plans', async (req, res) => { const input = requestSchema.parse(req.body); const candidates = eligiblePlaces(userStore(res).places(), input); if (!candidates.length) throw new ServiceError(422, 'NO_MATCH', 'No catalogue entry matches your area, mood, budget and available time.'); const controller = new AbortController(); const closed = () => { if (!res.writableEnded) controller.abort() }; res.on('close', closed); let selection, source = 'ai', warning = null; try { try { selection = await ollama.generate(input, candidates, controller.signal) } catch (e) { if (!config.allowFallback || controller.signal.aborted || e.code === 'OLLAMA_BUSY') throw e; source = 'demo'; warning = e.message; selection = fallbackSelection(input, candidates[0]); } if (controller.signal.aborted) return; const place = candidates.find(p => p.id === selection.placeId); if (!place) throw new ServiceError(502, 'INVALID_AI_RESPONSE', 'Selected place is outside the shortlist.'); const plan = buildPlan(input, place, selection, source); userStore(res).upsertPlan(plan); res.status(201).json({ plan, meta: { provider: source === 'ai' ? (config.provider || 'ollama') : 'rules', model: source === 'ai' ? config.model : null, fallback: source !== 'ai', warning } }) } finally { res.off('close', closed) } });
+    app.get('/api/plans/:id', (req, res) => { const plan = userStore(res).plan(idSchema.parse(req.params.id)); if (!plan) throw new ServiceError(404, 'NOT_FOUND', 'Plan not found.'); res.json({ plan }) });
+    app.get('/api/saved-plans', (_req, res) => res.json({ plans: userStore(res).savedPlans() }));
+    app.post('/api/saved-plans', (req, res) => res.status(201).json({ plan: userStore(res).upsertPlan(planSchema.parse(req.body), true) }));
+    app.delete('/api/saved-plans/:id', (req, res) => { userStore(res).deleteSaved(idSchema.parse(req.params.id)); res.status(204).end() });
+    app.get('/api/history', (_req, res) => res.json({ history: userStore(res).history() }));
+    app.post('/api/history', (req, res) => res.status(201).json({ entry: userStore(res).addHistory(historySchema.parse(req.body)) }));
+    app.delete('/api/history/:id', (req, res) => { userStore(res).deleteHistory(idSchema.parse(req.params.id)); res.status(204).end() });
+    app.get('/api/state', (_req, res) => res.json(userStore(res).snapshot()));
+    app.put('/api/state', (req, res) => res.json(userStore(res).replaceState(stateSchema.parse(req.body))));
+    app.delete('/api/data', (_req, res) => { userStore(res).clear(); res.status(204).end() });
+    app.use('/api', (_req, res) => res.status(404).json({ error: { code: 'NOT_FOUND', message: 'API route not found.' } }));
+    if (config.serveFrontend) { const dist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../dist'); if (!existsSync(path.join(dist, 'index.html'))) throw Error('Build the frontend first: npm run build at the project root.'); app.use(express.static(dist)); app.get('/{*path}', (_req, res) => res.sendFile(path.join(dist, 'index.html'))) }
+    app.use((err, _req, res, _next) => { if (err instanceof ZodError) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid request data.', issues: err.issues.map(i => ({ path: i.path.join('.'), message: i.message })) } }); if (err.type === 'entity.parse.failed') return res.status(400).json({ error: { code: 'INVALID_JSON', message: 'Request body must be valid JSON.' } }); if (err.type === 'entity.too.large') return res.status(413).json({ error: { code: 'BODY_TOO_LARGE', message: 'Request body exceeds 5 MB.' } }); const status = err.status || 500; if (status >= 500 && !(err instanceof ServiceError)) console.error(err); return res.status(status).json({ error: { code: err.code || 'INTERNAL_ERROR', message: err instanceof ServiceError ? err.message : 'An internal error occurred.' } }) });
+    return app;
+}

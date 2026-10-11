@@ -1,0 +1,12 @@
+import { config } from './config.js';
+import { openDatabase, createStore } from './database.js';
+import { createOpenRouter } from './openrouter.js';
+import { createOllama } from './ollama.js';
+import { createApp } from './app.js';
+if (!config.publicMode && !['127.0.0.1', 'localhost', '::1'].includes(config.host)) throw Error('HOST must be a loopback address. This is a single-profile local backend.');
+const db = openDatabase(config.databasePath);
+const store = createStore(db);
+const app = createApp({ store, storeForOwner: owner => createStore(db, owner), ollama: config.provider === 'openrouter' ? createOpenRouter(config) : createOllama(config), config });
+const server = app.listen(config.port, config.host, () => { console.log(`BreakTrail API: http://${config.host}:${config.port}/api`); console.log(`SQLite: ${config.databasePath}`); console.log(`AI provider: ${config.provider} | model: ${config.model}`); console.log(`Fallback: ${config.allowFallback ? 'enabled and explicitly labeled' : 'disabled (strict AI)'}`) });
+server.on('error', err => { store.close(); console.error(err.message); process.exitCode = 1 });
+for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => { server.close(() => { store.close(); process.exit(0) }); setTimeout(() => process.exit(1), 5000).unref() });
