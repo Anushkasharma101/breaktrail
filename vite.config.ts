@@ -1,0 +1,5 @@
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
+import { VitePWA } from 'vite-plugin-pwa';
+export default defineConfig({plugins:[react(),tailwindcss(),VitePWA({registerType:'autoUpdate',includeAssets:['assets/logo.svg','assets/garden.webp','assets/icon-192.png','assets/icon-512.png'],manifest:{name:'BreakTrail — Outdoor breaks',short_name:'BreakTrail',description:'Less scrolling. More outside.',theme_color:'#244D3C',background_color:'#FFF9F0',display:'standalone',start_url:'./',icons:[{src:'assets/icon-192.png',sizes:'192x192',type:'image/png'},{src:'assets/icon-512.png',sizes:'512x512',type:'image/png'}]},workbox:{globPatterns:['**/*.{js,css,html,svg,png,webp,ico}'],maximumFileSizeToCacheInBytes:5*1024*1024,cleanupOutdatedCaches:true,navigateFallback:'index.html',navigateFallbackDenylist:[/^\/api\//]},devOptions:{enabled:false}})],server:{port:5173,strictPort:true,proxy:{'/api':{target:'http://localhost:3001',changeOrigin:true}}}});

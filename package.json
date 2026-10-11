@@ -1,1 +1,35 @@
-{"name":"breaktrail-backend","version":"1.0.0","private":true,"type":"module","engines":{"node":">=22.13.0"},"scripts":{"dev":"node --watch src/server.js","start":"node src/server.js","seed":"node scripts/seed.js","test":"node --test --test-concurrency=1 tests/*.test.js","check:ollama":"node scripts/check-ollama.js"},"dependencies":{"express":"^5.1.0","cors":"^2.8.5","dotenv":"^16.4.7","zod":"^3.24.0"},"devDependencies":{"supertest":"^7.1.0"}}
+{
+  "name": "breaktrail-react-frontend",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "dev:api": "npm --prefix backend run dev",
+    "start:api": "npm --prefix backend start",
+    "test:api": "npm --prefix backend test",
+    "setup:api": "npm --prefix backend ci"
+  },
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "zod": "^3.24.0",
+    "lucide-react": "^0.468.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/node": "^22.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^6.1.0",
+    "typescript": "^5.7.3",
+    "tailwindcss": "^4.0.0",
+    "@tailwindcss/vite": "^4.0.0",
+    "vite-plugin-pwa": "^1.0.0",
+    "vitest": "^3.0.0"
+  }
+}
