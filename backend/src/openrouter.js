@@ -33,9 +33,31 @@ export function createOpenRouter(config, { fetchImpl = fetch } = {}) {
                     if (res.status === 401 || res.status === 403) throw new ServiceError(503, 'AI_KEY_INVALID', 'The server AI key is invalid or access is restricted.');
                     throw new ServiceError(503, 'AI_UNAVAILABLE', 'The free AI provider is unavailable. Try later or use demo mode.');
                 }
-                const payload = await res.json(); let selection;
-                try { selection = selectionSchema.parse(JSON.parse(payload.choices?.[0]?.message?.content || '')) }
-                catch { throw new ServiceError(502, 'INVALID_AI_RESPONSE', 'The model returned an invalid plan. Try again or use demo mode.') }
+                const payload = await res.json();
+                const choice = payload.choices?.[0];
+                const content = choice?.message?.content;
+                let selection;
+
+                try {
+                    selection = selectionSchema.parse(JSON.parse(content || ''));
+                } catch (error) {
+                    console.error('AI_RESPONSE_DIAGNOSTIC', {
+                        model: payload.model,
+                        finishReason: choice?.finish_reason,
+                        contentLength: typeof content === 'string' ? content.length : 0,
+                        errorType: error.name,
+                        issues: error.issues?.map(issue => ({
+                            path: issue.path,
+                            code: issue.code
+                        }))
+                    });
+
+                    throw new ServiceError(
+                        502,
+                        'INVALID_AI_RESPONSE',
+                        'The model returned an invalid plan. Try again or use demo mode.'
+                    );
+                }
                 if (!candidates.some(p => p.id === selection.placeId)) throw new ServiceError(502, 'INVALID_AI_RESPONSE', 'The model selected a place outside the allowed catalogue.');
                 return selection;
             } catch (e) {
